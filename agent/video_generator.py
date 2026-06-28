@@ -1,62 +1,67 @@
 import os
 import time
+import base64
 import requests
 
 
 class VideoGenerator:
-    """Generates videos via the Runway ML Gen-3 API."""
+    """Generates videos via Google Veo 2 (Gemini API, free tier)."""
 
-    API_BASE = "https://api.runwayml.com/v1"
+    API_BASE = "https://generativelanguage.googleapis.com/v1beta"
+    MODEL = "veo-2.0-generate-001"
 
     def __init__(self):
-        self.api_key = os.environ["RUNWAY_API_KEY"]
-        self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        self.api_key = os.environ["GEMINI_API_KEY"]
 
-    def generate(self, prompt: str, output_path: str, duration: int = 5) -> str:
+    def generate(self, prompt: str, output_path: str, duration: int = 8) -> str:
+        operation_name = self._start_generation(prompt, duration)
+        video_data = self._poll(operation_name)
+        return self._save(video_data, output_path)
+
+    def _start_generation(self, prompt: str, duration: int) -> str:
+        url = f"{self.API_BASE}/models/{self.MODEL}:predictLongRunning"
         payload = {
-            "prompt": prompt,
-            "duration": duration,
-            "ratio": "9:16",
-            "resolution": "720p",
+            "instances": [{"prompt": prompt}],
+            "parameters": {
+                "aspectRatio": "9:16",
+                "durationSeconds": duration,
+            },
         }
         resp = requests.post(
-            f"{self.API_BASE}/generate/video",
+            url,
             json=payload,
-            headers=self.headers,
+            params={"key": self.api_key},
             timeout=30,
         )
         resp.raise_for_status()
-        task_id = resp.json()["id"]
+        return resp.json()["name"]
 
-        video_url = self._poll(task_id)
-        return self._download(video_url, output_path)
-
-    def _poll(self, task_id: str, max_wait: int = 300) -> str:
+    def _poll(self, operation_name: str, max_wait: int = 600) -> bytes:
+        url = f"{self.API_BASE}/{operation_name}"
         deadline = time.time() + max_wait
         while time.time() < deadline:
-            resp = requests.get(
-                f"{self.API_BASE}/tasks/{task_id}",
-                headers=self.headers,
-                timeout=15,
-            )
+            resp = requests.get(url, params={"key": self.api_key}, timeout=15)
             resp.raise_for_status()
             data = resp.json()
-            status = data.get("status")
-            if status == "SUCCEEDED":
-                return data["output"][0]
-            if status in ("FAILED", "CANCELLED"):
-                raise RuntimeError(f"Video generation {status}: {data.get('error')}")
-            time.sleep(10)
-        raise TimeoutError(f"Video generation timed out after {max_wait}s")
+            if data.get("done"):
+                if "error" in data:
+                    raise RuntimeError(f"Veo 2 generation failed: {data['error']}")
+                prediction = data["response"]["predictions"][0]
+                if "bytesBase64Encoded" in prediction:
+                    return base64.b64decode(prediction["bytesBase64Encoded"])
+                if "video" in prediction and "uri" in prediction["video"]:
+                    return self._fetch_uri(prediction["video"]["uri"])
+                raise RuntimeError(f"Unexpected response shape: {prediction.keys()}")
+            time.sleep(15)
+        raise TimeoutError(f"Veo 2 generation timed out after {max_wait}s")
 
-    def _download(self, url: str, output_path: str) -> str:
-        resp = requests.get(url, stream=True, timeout=60)
+    def _fetch_uri(self, uri: str) -> bytes:
+        resp = requests.get(uri, params={"key": self.api_key}, timeout=120)
         resp.raise_for_status()
+        return resp.content
+
+    def _save(self, video_bytes: bytes, output_path: str) -> str:
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
         with open(output_path, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=8192):
-                f.write(chunk)
+            f.write(video_bytes)
         return output_path
