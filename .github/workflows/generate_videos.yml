@@ -1,0 +1,43 @@
+name: Generate Food Videos
+
+on:
+  schedule:
+    - cron: "0 8 * * *"   # Daily at 8 AM UTC
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "Number of videos to generate"
+        required: false
+        default: "1"
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate videos
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+        run: |
+          COUNT="${{ github.event.inputs.count || '1' }}"
+          python pipeline.py --count "$COUNT" --output-dir output
+
+      - name: Upload output artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-videos-${{ github.run_id }}
+          path: output/
+          retention-days: 3

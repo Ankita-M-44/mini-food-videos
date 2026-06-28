@@ -1,0 +1,44 @@
+name: Upload Food Videos
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run ID of the generate_videos workflow to pull artifacts from"
+        required: true
+      platforms:
+        description: "Platforms to upload to (space-separated: instagram youtube)"
+        required: false
+        default: "instagram youtube"
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download generated videos
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-videos-${{ github.event.inputs.run_id }}
+          path: output/
+
+      - name: Upload to social platforms
+        env:
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          INSTAGRAM_USERNAME: ${{ secrets.INSTAGRAM_USERNAME }}
+          INSTAGRAM_PASSWORD: ${{ secrets.INSTAGRAM_PASSWORD }}
+          YOUTUBE_CREDENTIALS_JSON: ${{ secrets.YOUTUBE_CREDENTIALS_JSON }}
+        run: |
+          PLATFORMS="${{ github.event.inputs.platforms }}"
+          python uploader.py --output-dir output --platforms $PLATFORMS
